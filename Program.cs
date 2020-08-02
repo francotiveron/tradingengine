@@ -19,7 +19,9 @@ namespace TradingEngine
             matcher.Tell(Ask.New("3", "MSFT", units: 50, price: 100.00m), ActorRefs.Nobody);
 
             // Get the current price
-            matcher.Ask<GetPriceResult>(Ask.New("3", "MSFT", units: 50, price: 100.00m))
+            //matcher.Ask<GetPriceResult>(Ask.New("3", "MSFT", units: 50, price: 100.00m))
+            //    .ContinueWith(r => Console.WriteLine($"MSFT bid:{r.Result.Bid:c2} ask:{r.Result.Ask:c2}"));
+            matcher.Ask<GetPriceResult>(new GetPrice())
                 .ContinueWith(r => Console.WriteLine($"MSFT bid:{r.Result.Bid:c2} ask:{r.Result.Ask:c2}"));
 
             // Listen for trade settlement and price changes

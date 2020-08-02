@@ -201,21 +201,20 @@ namespace TradingEngine
 
             var logger = Sys.ActorOf(dsl =>
             {
-                //dsl.Receive<TradeSettled>((evt, ctx) => { ts = new TradeSettled { Units = evt.Units, Price = evt.Price }; h.Set(); });
-                dsl.Receive<TradeSettled>((evt, ctx) => { Assert.Equal((units, price), (evt.Units, evt.Price)); h.Set(); });
+                dsl.Receive<TradeSettled>((evt, ctx) => { units = evt.Units; price = evt.Price; h.Set(); });
             });
             Sys.EventStream.Subscribe(logger, typeof(TradeSettled));
 
             _Buy(76, price = 10m);
             _Sell(units = 45, 9m);
             Assert.True(h.WaitOne(1000));
-            //Assert.Equal((45, 10m), (ts.Units, ts.Price));
-            //_Sell(80, 9.5m);
-            //Assert.True(h.WaitOne(1000));
-            //Assert.Equal((31, 10m), (units, price));
-            //_Buy(100, 10.5m);
-            //Assert.True(h.WaitOne(1000));
-            //Assert.Equal((49, 9.5m), (units, price));
+            Assert.Equal((45, 10m), (units, price));
+            _Sell(80, 9.5m);
+            Assert.True(h.WaitOne(1000));
+            Assert.Equal((31, 10m), (units, price));
+            _Buy(100, 10.5m);
+            Assert.True(h.WaitOne(1000));
+            Assert.Equal((49, 9.5m), (units, price));
         }
     }
 }

@@ -1,19 +1,16 @@
 using Akka.Actor;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
 
 namespace TradingEngine
 {
     public class Matcher : UntypedActor
     {
         private readonly string _stockId;
-        Queue<object> messages = new Queue<object>();
-        List<Order> Bids { get; } = new List<Order>();
-        List<Order> Asks { get; } = new List<Order>();
-        IEnumerable<Order> All => Bids.Concat(Asks);
+        List<DynOrder> Bids { get; } = new List<DynOrder>();
+        List<DynOrder> Asks { get; } = new List<DynOrder>();
+        IEnumerable<DynOrder> All => Bids.Concat(Asks);
         List<Trade> Trades { get; } = new List<Trade>();
         bool run = true;
 
@@ -69,28 +66,30 @@ namespace TradingEngine
 
         void RaiseOrderPlaced(Order order) => Raise(new OrderPlaced { Order = order });
 
-        void UpdateBid() => Bid = Bids.Count > 0 ? (decimal?)Bids.Max(ord => ord.Price) : null;
-        void UpdateAsk() => Ask = Asks.Count > 0 ? (decimal?)Asks.Min(ord => ord.Price) : null;
+        void UpdateBid() => Bid = Bids.Count > 0 ? (decimal?)Bids.Max(ord => ord.Order.Price) : null;
+        void UpdateAsk() => Ask = Asks.Count > 0 ? (decimal?)Asks.Min(ord => ord.Order.Price) : null;
 
-        void Add(Order order)
+        DynOrder Add(Order order)
         {
+            var dynOrder = new DynOrder(order);
             if (order.IsBid)
             {
-                Bids.Add(order);
+                Bids.Add(dynOrder);
                 UpdateBid();
             }
             else
             {
-                Asks.Add(order);
+                Asks.Add(dynOrder);
                 UpdateAsk();
             }
-            messages.Enqueue(order);
             RaiseOrderPlaced(order);
             RaisePriceChanged();
+
+            return dynOrder;
         }
-        void Remove(Order order)
+        void Remove(DynOrder order)
         {
-            if (order.IsBid)
+            if (order.Order.IsBid)
             {
                 Bids.Remove(order);
                 UpdateBid();
@@ -101,46 +100,38 @@ namespace TradingEngine
                 UpdateAsk();
             }
         }
-        bool IsInvalid(Order order) => order.Price <= 0m || order.Units <= 0 || All.Any(ord => ord.OrderId == order.OrderId);
+        bool IsInvalid(Order order) => order.Price <= 0m || order.Units <= 0 || All.Any(ord => ord.Order.OrderId == order.OrderId);
 
         protected override void OnReceive(object message) //=> Unhandled(message);
         {
             switch (message)
             {
                 case Bid bidMsg:
-                    if (IsInvalid(bidMsg.Order))
+                    BidResult bidResult;
+                    if (run)
                     {
-                        Sender.Tell(new BidResult { Success = false, Reason = "Invalid Order" });
-                        break;
+                        if (Process(bidMsg.Order)) bidResult = new BidResult { Success = true, Reason = "Valid Order" };
+                        else bidResult = new BidResult { Success = false, Reason = "Invalid Order" };
                     }
-                    Sender.Tell(new BidResult { Success = true, Reason = "Valid Order" });
-
-                    Add(bidMsg.Order);
-                    Self.Tell("Next");
+                    else
+                    {
+                        bidResult = new BidResult { Success = false, Reason = "Engine Halted" };
+                    }
+                    Sender.Tell(bidResult);
                     break;
 
                 case Ask askMsg:
-                    if (IsInvalid(askMsg.Order))
+                    AskResult askResult;
+                    if (run)
                     {
-                        Sender.Tell(new AskResult { Success = false, Reason = "Invalid Order" });
-                        break;
+                        if (Process(askMsg.Order)) askResult = new AskResult { Success = true, Reason = "Valid Order" };
+                        else askResult = new AskResult { Success = false, Reason = "Invalid Order" };
                     }
-                    Sender.Tell(new AskResult { Success = true, Reason = "Valid Order" });
-
-                    Add(askMsg.Order);
-                    Self.Tell("Next");
-                    break;
-
-                case "Next":
-                    if (run && messages.TryDequeue(out var msg))
+                    else
                     {
-                        Self.Tell(msg);
-                        Self.Tell("Next");
+                        askResult = new AskResult { Success = false, Reason = "Engine Halted" };
                     }
-                    break;
-
-                case Order order:
-                    Process(order);
+                    Sender.Tell(askResult);
                     break;
 
                 case GetPrice _:
@@ -176,37 +167,38 @@ namespace TradingEngine
 
                 case Start _:
                     run = true;
-                    Self.Tell("Next");
                     break;
 
                 case Halt _:
                     run = false;
                     break;
-
-                case "AllDone":
-                    Sender.Tell(messages.Count == 0);
-                    break;
             }
 
-            void Process(Order order)
+            bool Process(Order ord)
             {
-                var (orders, oppositeOrders, selector) = order.IsBid ? 
-                    (Bids, Asks, new Func<Order, bool>((Order o) => o.Price <= order.Price)) : 
-                    (Asks, Bids, new Func<Order, bool>((Order o) => o.Price >= order.Price));
+                if (IsInvalid(ord)) return false;
+                
+                var order = Add(ord);
+
+                var (orders, oppositeOrders, selector) = order.Order.IsBid ? 
+                    (Bids, Asks, new Func<DynOrder, bool>((DynOrder o) => o.Order.Price <= order.Order.Price)) : 
+                    (Asks, Bids, new Func<DynOrder, bool>((DynOrder o) => o.Order.Price >= order.Order.Price));
 
                 var fillable = oppositeOrders.Where(selector).ToList();
                 foreach (var opposite in fillable)
                 {
                     var units = Math.Min(order.Units, opposite.Units);
-                    var trade = new Trade(order, opposite, opposite.Price, units);
+                    var trade = new Trade(order.Order, opposite.Order, opposite.Order.Price, units);
                     RaiseTradeSettled(trade);
                     Trades.Add(trade);
                     opposite.Units -= units;
                     if (opposite.Units <= 0) Remove(opposite);
                     order.Units -= units;
                     if (order.Units <= 0) Remove(order);
+                    RaisePriceChanged();
                 }
-                RaisePriceChanged();
+
+                return true;
             }
         }
     }
@@ -226,4 +218,14 @@ namespace TradingEngine
         }
     }
 
+    class DynOrder
+    {
+        public Order Order { get; }
+        public int Units { get; set; }
+        public DynOrder(Order order)
+        {
+            Order = order;
+            Units = Order.Units;
+        }
+    }
 }

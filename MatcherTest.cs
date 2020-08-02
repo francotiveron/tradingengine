@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using Akka.Actor.Dsl;
 using System.Threading;
 using Xunit;
+using Akka.Util.Internal;
+using System.Linq;
 
 namespace TradingEngine
 {
@@ -46,16 +48,12 @@ namespace TradingEngine
             var rsp = _matcher.Ask<GetPriceResult>(new GetPrice()).Result;
             Assert.Equal((bid, ask), (rsp.Bid, rsp.Ask));
         }
-        void AssertTrades(IList<Order> orders)
+        void AssertTrades(IEnumerable<Order> orders)
         {
             var rsp = _matcher.Ask<GetTradesResult>(new GetTrades()).Result;
             var set1 = new HashSet<Order>(orders);
             var set2 = new HashSet<Order>(rsp.Orders);
             Assert.True(set1.SetEquals(set2));
-        }
-        void Wait()
-        {
-            while (!_matcher.Ask<bool>("AllDone").Result) Thread.Sleep(1);
         }
         [Fact]
         public void Sell_order_should_place()
@@ -82,7 +80,6 @@ namespace TradingEngine
         {
             Buy(50, 99m);
             Sell(50, 100m);
-            Wait();
             AssertPrice(99m, 100m);
         }
         [Fact]
@@ -93,7 +90,6 @@ namespace TradingEngine
                 Buy(1, i);
                 Sell(1, 100 + i);
             }
-            Wait();
             AssertPrice(99m, 100m);
         }
         [Fact]
@@ -102,7 +98,6 @@ namespace TradingEngine
             var orders = new List<Order>();
             orders.Add(Buy(50, 100m));
             orders.Add(Sell(50, 100m));
-            Wait();
             AssertTrades(orders);
         }
         [Fact]
@@ -112,7 +107,6 @@ namespace TradingEngine
             orders.Add(Buy(50, 100m));
             orders.Add(Sell(10, 100m));
             orders.Add(Sell(10, 99m));
-            Wait();
             AssertTrades(orders);
         }
         [Fact]
@@ -129,31 +123,35 @@ namespace TradingEngine
                 if (sell > 50 && sell < 100) orders.Add(ask);
             }
 
-            Wait();
             AssertTrades(orders);
         }
         [Fact]
         public void Halt_Test()
         {
-            var orders = new List<Order>();
-            orders.Add(Buy(1, 10m));
-            orders.Add(Sell(1, 10m));
-            Wait();
+            var a1 = Ask.New(OID, "MSFT", 10, 10m);
+            var b1 = Bid.New(OID, "MSFT", 10, 10m);
+            var a2 = Ask.New(OID, "MSFT", 10, 11m);
+            var b2 = Bid.New(OID, "MSFT", 10, 11m);
+            
+            _matcher.Tell(a1);
+            _matcher.Tell(b1);
+
+            Order[] orders = { a1.Order, b1.Order };
             AssertTrades(orders);
 
             _matcher.Tell(new Halt());
 
-            var o1 = Buy(1, 20m);
-            var o2 = Sell(1, 20m);
-            Thread.Sleep(200);
+            _matcher.Tell(a2);
+            _matcher.Tell(b2);
+
             AssertTrades(orders);
 
             _matcher.Tell(new Start());
 
-            orders.Add(o1);
-            orders.Add(o2);
-            Wait();
-            AssertTrades(orders);
+            _matcher.Tell(a2);
+            _matcher.Tell(b2);
+
+            AssertTrades(orders.AsEnumerable().Concat(new Order[] { a2.Order, b2.Order}));
         }
         [Fact]
         public void PriceChanged_Event()
@@ -203,20 +201,21 @@ namespace TradingEngine
 
             var logger = Sys.ActorOf(dsl =>
             {
-                dsl.Receive<TradeSettled>((evt, ctx) => { units = evt.Units; price = evt.Price; h.Set(); });
+                //dsl.Receive<TradeSettled>((evt, ctx) => { ts = new TradeSettled { Units = evt.Units, Price = evt.Price }; h.Set(); });
+                dsl.Receive<TradeSettled>((evt, ctx) => { Assert.Equal((units, price), (evt.Units, evt.Price)); h.Set(); });
             });
             Sys.EventStream.Subscribe(logger, typeof(TradeSettled));
 
-            _Buy(76, 10m);
-            _Sell(45, 9m);
+            _Buy(76, price = 10m);
+            _Sell(units = 45, 9m);
             Assert.True(h.WaitOne(1000));
-            Assert.Equal((45, 10m), (units, price));
-            _Sell(80, 9.5m);
-            Assert.True(h.WaitOne(1000));
-            Assert.Equal((31, 10m), (units, price));
-            _Buy(100, 10.5m);
-            Assert.True(h.WaitOne(1000));
-            Assert.Equal((49, 9.5m), (units, price));
+            //Assert.Equal((45, 10m), (ts.Units, ts.Price));
+            //_Sell(80, 9.5m);
+            //Assert.True(h.WaitOne(1000));
+            //Assert.Equal((31, 10m), (units, price));
+            //_Buy(100, 10.5m);
+            //Assert.True(h.WaitOne(1000));
+            //Assert.Equal((49, 9.5m), (units, price));
         }
     }
 }

@@ -7,7 +7,7 @@ namespace TradingEngine
 {
     public class Matcher : UntypedActor
     {
-        private readonly string _stockId;
+        readonly string _stockId;
         List<DynOrder> Bids { get; } = new List<DynOrder>();
         List<DynOrder> Asks { get; } = new List<DynOrder>();
         IEnumerable<DynOrder> All => Bids.Concat(Asks);
@@ -16,9 +16,9 @@ namespace TradingEngine
 
         decimal? bid;
         bool bidChanged = false;
-        public decimal? Bid { 
+        decimal? Bid { 
             get => bid;
-            private set
+            set
             {
                 bidChanged = value != bid;
                 bid = value;
@@ -27,10 +27,10 @@ namespace TradingEngine
 
         decimal? ask;
         bool askChanged = false;
-        public decimal? Ask
+        decimal? Ask
         {
             get => ask;
-            private set
+            set
             {
                 askChanged = value != ask;
                 ask = value;
@@ -43,6 +43,7 @@ namespace TradingEngine
         }
 
         void Raise(object evt) => Context.System.EventStream.Publish(evt);
+
         void RaisePriceChanged()
         {
             if (askChanged || bidChanged)
@@ -51,6 +52,7 @@ namespace TradingEngine
                 askChanged = bidChanged = false;
             }
         }
+
         void RaiseTradeSettled(Trade trade)
         {
             (Order bidOrder, Order askOrder) = trade.Order1.IsBid ? (trade.Order1, trade.Order2) : (trade.Order2, trade.Order1);
@@ -67,6 +69,7 @@ namespace TradingEngine
         void RaiseOrderPlaced(Order order) => Raise(new OrderPlaced { Order = order });
 
         void UpdateBid() => Bid = Bids.Count > 0 ? (decimal?)Bids.Max(ord => ord.Order.Price) : null;
+
         void UpdateAsk() => Ask = Asks.Count > 0 ? (decimal?)Asks.Min(ord => ord.Order.Price) : null;
 
         DynOrder Add(Order order)
@@ -87,6 +90,7 @@ namespace TradingEngine
 
             return dynOrder;
         }
+
         void Remove(DynOrder order)
         {
             if (order.Order.IsBid)
@@ -100,7 +104,6 @@ namespace TradingEngine
                 UpdateAsk();
             }
         }
-        bool IsInvalid(Order order) => order.Price <= 0m || order.Units <= 0 || All.Any(ord => ord.Order.OrderId == order.OrderId);
 
         protected override void OnReceive(object message) //=> Unhandled(message);
         {
@@ -184,8 +187,9 @@ namespace TradingEngine
                     (Bids, Asks, new Func<DynOrder, bool>((DynOrder o) => o.Order.Price <= order.Order.Price)) : 
                     (Asks, Bids, new Func<DynOrder, bool>((DynOrder o) => o.Order.Price >= order.Order.Price));
 
-                var fillable = oppositeOrders.Where(selector).ToList();
-                foreach (var opposite in fillable)
+                var fillableByPrice = oppositeOrders.Where(selector).ToList();
+
+                foreach (var opposite in fillableByPrice)
                 {
                     var units = Math.Min(order.Units, opposite.Units);
                     var trade = new Trade(order.Order, opposite.Order, opposite.Order.Price, units);
@@ -194,14 +198,21 @@ namespace TradingEngine
                     opposite.Units -= units;
                     if (opposite.Units <= 0) Remove(opposite);
                     order.Units -= units;
-                    if (order.Units <= 0) Remove(order);
-                    RaisePriceChanged();
+                    if (order.Units <= 0){
+                        Remove(order);
+                        break;
+                    }
                 }
+                RaisePriceChanged();
 
                 return true;
+                
+                //Helper
+                bool IsInvalid(Order order) => order.Price <= 0m || order.Units <= 0 || All.Any(ord => ord.Order.OrderId == order.OrderId);
             }
         }
     }
+
     class Trade
     {
         public Order Order1 { get; }

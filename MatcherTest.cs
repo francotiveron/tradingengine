@@ -19,42 +19,6 @@ namespace TradingEngine
             _matcher = Sys.ActorOf(Props.Create(() => new Matcher("MSFT")));
         }
 
-        string OID => (++oId).ToString();
-        Order Buy(int units, decimal price)
-        {
-            var msg = Bid.New(OID, "MSFT", units: units, price: price);
-            _matcher.Tell(msg);
-            return msg.Order;
-        }
-        Order Sell(int units, decimal price)
-        {
-            var msg = Ask.New(OID, "MSFT", units: units, price: price);
-            _matcher.Tell(msg);
-            return msg.Order;
-        }
-        void _Buy(int units, decimal price)
-        {
-            var msg = Bid.New(OID, "MSFT", units: units, price: price);
-            _matcher.Ask<BidResult>(msg);
-        }
-        void _Sell(int units, decimal price)
-        {
-            var msg = Ask.New(OID, "MSFT", units: units, price: price);
-            _matcher.Ask<AskResult>(msg);
-        }
-
-        void AssertPrice(decimal bid, decimal ask)
-        {
-            var rsp = _matcher.Ask<GetPriceResult>(new GetPrice()).Result;
-            Assert.Equal((bid, ask), (rsp.Bid, rsp.Ask));
-        }
-        void AssertTrades(IEnumerable<Order> orders)
-        {
-            var rsp = _matcher.Ask<GetTradesResult>(new GetTrades()).Result;
-            var set1 = new HashSet<Order>(orders);
-            var set2 = new HashSet<Order>(rsp.Orders);
-            Assert.True(set1.SetEquals(set2));
-        }
         [Fact]
         public void Sell_order_should_place()
         {
@@ -165,11 +129,11 @@ namespace TradingEngine
             });
             Sys.EventStream.Subscribe(logger, typeof(PriceChanged));
 
-            _Buy(1, 10m);
+            Buy(1, 10m);
             Assert.True(h.WaitOne(1000));
             Assert.Equal(10m, bid);
             Assert.Null(ask);
-            _Sell(1, 11m);
+            Sell(1, 11m);
             Assert.True(h.WaitOne(1000));
             Assert.Equal(10m, bid);
             Assert.Equal(11m, ask);
@@ -205,16 +169,44 @@ namespace TradingEngine
             });
             Sys.EventStream.Subscribe(logger, typeof(TradeSettled));
 
-            _Buy(76, price = 10m);
-            _Sell(units = 45, 9m);
+            Buy(76, price = 10m);
+            Sell(units = 45, 9m);
             Assert.True(h.WaitOne(1000));
             Assert.Equal((45, 10m), (units, price));
-            _Sell(80, 9.5m);
+            Sell(80, 9.5m);
             Assert.True(h.WaitOne(1000));
             Assert.Equal((31, 10m), (units, price));
-            _Buy(100, 10.5m);
+            Buy(100, 10.5m);
             Assert.True(h.WaitOne(1000));
             Assert.Equal((49, 9.5m), (units, price));
         }
+
+        //Helpers
+        string OID => (++oId).ToString();
+        Order Buy(int units, decimal price)
+        {
+            var msg = Bid.New(OID, "MSFT", units: units, price: price);
+            _matcher.Tell(msg);
+            return msg.Order;
+        }
+        Order Sell(int units, decimal price)
+        {
+            var msg = Ask.New(OID, "MSFT", units: units, price: price);
+            _matcher.Tell(msg);
+            return msg.Order;
+        }
+        void AssertPrice(decimal bid, decimal ask)
+        {
+            var rsp = _matcher.Ask<GetPriceResult>(new GetPrice()).Result;
+            Assert.Equal((bid, ask), (rsp.Bid, rsp.Ask));
+        }
+        void AssertTrades(IEnumerable<Order> orders)
+        {
+            var rsp = _matcher.Ask<GetTradesResult>(new GetTrades()).Result;
+            var set1 = new HashSet<Order>(orders);
+            var set2 = new HashSet<Order>(rsp.Orders);
+            Assert.True(set1.SetEquals(set2));
+        }
+
     }
 }
